@@ -1,5 +1,7 @@
 """Transaction service: add, edit, soft delete and list transactions."""
 
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -103,3 +105,100 @@ def recent(session: Session, user_id: int, limit: int = 5) -> list[dict]:
         .limit(limit)
     )
     return [_as_dict(transaction) for transaction in session.scalars(query)]
+
+
+def _find(session: Session, user_id: int, ref: int | str) -> Transaction:
+    """Resolve a transaction id or the keyword 'last' to a live transaction."""
+    if isinstance(ref, str) and ref.strip().lower() == "last":
+        transaction = session.scalar(
+            select(Transaction)
+            .where(Transaction.user_id == user_id, Transaction.deleted_at.is_(None))
+            .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+            .limit(1)
+        )
+        if transaction is None:
+            raise ValueError("No transactions to work with yet")
+        return transaction
+
+    try:
+        tx_id = int(ref)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid transaction reference: {ref!r}") from exc
+
+    transaction = get_transaction(session, user_id, tx_id)
+    if transaction is None:
+        raise ValueError(f"Transaction #{tx_id} not found")
+    return transaction
+
+
+def update_transaction(
+    session: Session,
+    user_id: int,
+    ref: int | str,
+    amount: str | None = None,
+    category: str | None = None,
+    account: str | None = None,
+    description: str | None = None,
+    date: str | None = None,
+    type: str | None = None,
+) -> dict:
+    """Update fields of an existing transaction and report the before and after state."""
+    transaction = _find(session, user_id, ref)
+    before = _as_dict(transaction)
+
+    if type is not None:
+        kind = type.strip().lower()
+        if kind not in ICONS:
+            raise ValueError(f"Unknown transaction type: {kind!r}, expected expense or income")
+        transaction.type = kind
+        # the old category belongs to the old kind, so re-resolve it for the new one
+        resolved = resolve_category(session, user_id, category or before["category"], kind)
+        transaction.category_id = resolved.id
+    elif category is not None:
+        transaction.category_id = resolve_category(
+            session, user_id, category, transaction.type
+        ).id
+
+    if amount is not None:
+        transaction.amount = to_decimal(amount, positive=True)
+    if account is not None:
+        transaction.account_id = resolve_account(session, user_id, account).id
+    if description is not None:
+        transaction.description = description.strip() or None
+    if date is not None:
+        transaction.occurred_on = parse_date(date)
+
+    transaction.updated_at = datetime.now(timezone.utc)
+    session.flush()
+    session.refresh(transaction)
+
+    after = _as_dict(transaction)
+    parts = [
+        f"✏️ #{after['id']} updated: {after['category'] or 'Uncategorised'}",
+        format_rs(after["amount"]),
+        after["account"] or "No account",
+        human_date(after["date"]),
+    ]
+    return {"before": before, "after": after, "confirmation_text": " · ".join(parts)}
+
+
+def _soft_delete(session: Session, user_id: int, ref: int | str, prefix: str) -> dict:
+    """Soft delete a transaction and build its confirmation line."""
+    transaction = _find(session, user_id, ref)
+    deleted = _as_dict(transaction)
+    transaction.deleted_at = datetime.now(timezone.utc)
+    session.flush()
+
+    category = deleted["category"] or "Uncategorised"
+    text = f"{prefix} #{deleted['id']} {category} · {format_rs(deleted['amount'])}"
+    return {"deleted": deleted, "confirmation_text": text}
+
+
+def delete_transaction(session: Session, user_id: int, ref: int | str) -> dict:
+    """Soft delete a transaction by id or the keyword 'last'."""
+    return _soft_delete(session, user_id, ref, "🗑️ Deleted")
+
+
+def undo_last(session: Session, user_id: int) -> dict:
+    """Soft delete the most recently created transaction."""
+    return _soft_delete(session, user_id, "last", "↩️ Undone")

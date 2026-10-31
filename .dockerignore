@@ -1,0 +1,9 @@
+.git/
+.venv/
+.env
+data/*
+!data/.gitkeep
+__pycache__/
+*.pyc
+.pytest_cache/
+*.pdf

@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse
 
 from app.bootstrap import seed
 from app.config import settings
@@ -14,17 +14,27 @@ from app.whatsapp.webhook import router as webhook_router
 
 logger = logging.getLogger(__name__)
 
-PRIVACY_TEXT = (
-    "This is a personal expense tracker used by its owner only. "
-    "It stores the messages you send it and the expenses they describe, "
-    "and shares them with nobody. Message the owner to have your data deleted."
-)
+PRIVACY_HTML = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Privacy Policy</title></head>
+<body>
+<h1>Privacy Policy</h1>
+<p>This is a personal expense tracking bot used by its owner only.</p>
+<p>It stores the messages sent to it and the expenses, incomes, debts and savings
+they describe. The data is kept privately and is never shared, sold or used for
+advertising.</p>
+<p>No other person can use this bot: messages from numbers that are not on the
+owner's allow list are ignored.</p>
+<p>To ask for your data to be deleted, contact
+<a href="mailto:owner@example.com">owner@example.com</a>.</p>
+</body>
+</html>
+"""
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Create the database schema and seed the allowed users on startup."""
-    logging.basicConfig(level=settings.LOG_LEVEL)
     init_db()
     with session_scope() as session:
         users = seed(session)
@@ -32,17 +42,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+logging.basicConfig(level=settings.LOG_LEVEL)
 app = FastAPI(lifespan=lifespan)
 app.include_router(webhook_router)
 
 
 @app.get("/")
-def healthcheck() -> dict[str, str]:
+def root() -> dict[str, str]:
     """Report that the service is running."""
     return {"status": "up"}
 
 
-@app.get("/privacy", response_class=PlainTextResponse)
+@app.get("/health")
+def health() -> dict[str, str]:
+    """Health probe for the hosting platform."""
+    return {"status": "ok"}
+
+
+@app.get("/privacy", response_class=HTMLResponse)
 def privacy() -> str:
-    """Return the privacy notice required for the WhatsApp app review."""
-    return PRIVACY_TEXT
+    """Privacy policy page required for the WhatsApp app review."""
+    return PRIVACY_HTML

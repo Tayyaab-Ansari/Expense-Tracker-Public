@@ -22,6 +22,18 @@ logger = logging.getLogger(__name__)
 MAX_ROUNDS = 5
 FALLBACK_REPLY = "⚠️ Samajh nahi aaya, dobara likhein."
 
+# tools whose confirmation_text is the whole answer, so no second LLM call is needed
+SHORT_CIRCUIT_TOOLS = frozenset(
+    {
+        "add_transactions",
+        "update_transaction",
+        "delete_transaction",
+        "undo_last",
+        "set_account_balance",
+        "set_default_account",
+    }
+)
+
 
 @dataclass
 class AgentResult:
@@ -53,19 +65,25 @@ def _system_prompt(session: Session, user: User) -> str:
 
 
 def _assistant_message(message) -> dict:
-    """Serialise an assistant message with its tool calls for the next request."""
-    return {
-        "role": "assistant",
-        "content": message.content or "",
-        "tool_calls": [
-            {
-                "id": call.id,
-                "type": "function",
-                "function": {"name": call.function.name, "arguments": call.function.arguments},
-            }
-            for call in message.tool_calls
-        ],
-    }
+    """Serialise an assistant message, keeping tool calls and reasoning details intact."""
+    return message.model_dump(exclude_none=True)
+
+
+def _short_circuit_reply(results: list[tuple[str, dict]]) -> str | None:
+    """Confirmation lines for a round that already answered the user, else None."""
+    if not results:
+        return None
+    if any(
+        name not in SHORT_CIRCUIT_TOOLS or result.get("error") or not result.get("confirmation_text")
+        for name, result in results
+    ):
+        return None
+
+    lines: list[str] = []
+    for _, result in results:
+        lines.append(result["confirmation_text"])
+        lines.extend(result.get("budget_warnings") or [])
+    return "\n".join(lines)
 
 
 def _parse_arguments(raw: str | None) -> dict | None:
@@ -99,22 +117,31 @@ async def run(
                 break
 
             messages.append(_assistant_message(message))
+            results: list[tuple[str, dict]] = []
             for call in message.tool_calls:
+                name = call.function.name
                 args = _parse_arguments(call.function.arguments)
                 if args is None:
-                    logger.warning("Tool %s got unparsable arguments", call.function.name)
+                    logger.warning("Tool %s got unparsable arguments", name)
                     result = {"error": "arguments were not valid JSON"}
                 else:
-                    result = dispatch(session, user.id, call.function.name, args, context)
+                    result = dispatch(session, user.id, name, args, context)
                 if isinstance(result.get("document"), dict):
                     documents.append(result["document"])
+                results.append((name, result))
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": call.id,
+                        "name": name,
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
+
+            confirmed = _short_circuit_reply(results)
+            if confirmed:
+                reply = confirmed
+                break
         else:
             logger.warning("Agent gave up after %d rounds", MAX_ROUNDS)
     except LLMError:

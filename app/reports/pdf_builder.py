@@ -18,7 +18,8 @@ from reportlab.platypus import (
 )
 from sqlalchemy.orm import Session
 
-from app.services.analytics import compare_months, spending_summary, top_expenses
+from app.reports.calendar_view import build_calendar_flowables
+from app.services.analytics import compare_months, daily_totals, spending_summary, top_expenses
 from app.services.budgets import budget_status
 from app.services.debts import debt_summary
 from app.services.goals import goals_status
@@ -122,6 +123,18 @@ def _summary_section(session: Session, user_id: int, year: int, month: int) -> l
         ["Expenses vs last month", _pct_text(comparison["expense_change_pct"])],
     ]
     return [_table(rows, [90 * mm, 50 * mm])]
+
+
+def _calendar_section(session: Session, user_id: int, year: int, month: int) -> list:
+    """Calendar of daily spending with its legend."""
+    start, end = month_bounds(year, month)
+    totals = daily_totals(session, user_id, start, end)
+    if not totals:
+        return []
+    return [
+        Paragraph("Daily spending", HEADING_STYLE),
+        *build_calendar_flowables(totals, year, month),
+    ]
 
 
 def _category_section(session: Session, user_id: int, year: int, month: int) -> list:
@@ -264,7 +277,7 @@ def build_monthly_report(
         story.extend(
             [
                 *_summary_section(session, user_id, year, month),
-                # calendar inserted in P31
+                *_calendar_section(session, user_id, year, month),
                 *_category_section(session, user_id, year, month),
                 *_account_section(session, user_id, year, month),
                 *_top_expenses_section(session, user_id, year, month),

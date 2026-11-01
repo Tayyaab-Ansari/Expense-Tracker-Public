@@ -308,6 +308,81 @@ def test_invalid_month_returns_error(session: Session, user: User) -> None:
         assert "error" in dispatch(session, user.id, name, args)
 
 
+def test_debt_tools_via_dispatch(session: Session, user: User) -> None:
+    lent = dispatch(
+        session,
+        user.id,
+        "record_debt",
+        {
+            "person": "ali",
+            "kind": "lent",
+            "amount": 2000,
+            "account": "jazz",
+            "note": "rent",
+            "date": "2026-10-15",
+        },
+    )
+
+    assert lent["confirmation_text"] == "🤝 Lent Rs 2,000 to Ali · JazzCash · 15 Oct"
+    assert lent["person_balance"] == "2000.00"
+    assert lent["saved"]["note"] == "rent"
+    assert json.dumps(lent)
+
+    repaid = dispatch(
+        session, user.id, "record_debt", {"person": "ali", "kind": "repaid_to_me", "amount": 500}
+    )
+    assert repaid["confirmation_text"] == "✅ Ali paid back Rs 500 · Ali still owes you Rs 1,500"
+
+    summary = dispatch(session, user.id, "debt_summary", {})
+    assert summary["people"] == [{"person": "Ali", "net": "1500.00", "status": "owes you"}]
+    assert summary["total_owed_to_you"] == "1500.00"
+    assert dispatch(session, user.id, "debt_summary", {"person": "ALI"})["people"] == summary["people"]
+
+
+def test_debt_tool_errors(session: Session, user: User) -> None:
+    assert "Unknown debt kind" in dispatch(
+        session, user.id, "record_debt", {"person": "ali", "kind": "gifted", "amount": 1}
+    )["error"]
+    assert dispatch(session, user.id, "record_debt", {"kind": "lent", "amount": 1})[
+        "error"
+    ].startswith("Missing argument")
+
+
+def test_goal_tools_via_dispatch(session: Session, user: User) -> None:
+    created = dispatch(
+        session,
+        user.id,
+        "create_goal",
+        {"name": "Laptop", "target_amount": 150000, "deadline": "2027-06-30"},
+    )
+
+    assert created["target"] == "150000.00"
+    assert created["deadline"] == "2027-06-30"
+    assert created["status"] == "active"
+
+    added = dispatch(session, user.id, "add_to_goal", {"name": "laptop", "amount": 45000})
+    assert added["confirmation_text"] == "🎯 Laptop: Rs 45,000 / Rs 150,000 (30%)"
+
+    status = dispatch(session, user.id, "goals_status", {})
+    assert status["goals"][0]["saved"] == "45000.00"
+    assert status["goals"][0]["pct"] == "30.00"
+    assert json.dumps(status)
+
+    assert "No savings goal matching" in dispatch(
+        session, user.id, "add_to_goal", {"name": "car", "amount": 1}
+    )["error"]
+
+
+def test_add_to_goal_withdrawal_via_dispatch(session: Session, user: User) -> None:
+    dispatch(session, user.id, "create_goal", {"name": "Phone", "target_amount": 50000})
+    dispatch(session, user.id, "add_to_goal", {"name": "phone", "amount": 20000})
+
+    result = dispatch(session, user.id, "add_to_goal", {"name": "phone", "amount": -5000})
+
+    assert result["amount"] == "-5000.00"
+    assert result["saved"] == "15000.00"
+
+
 def test_set_default_account_via_dispatch(session: Session, user: User) -> None:
     result = dispatch(session, user.id, "set_default_account", {"account": "atm"})
 

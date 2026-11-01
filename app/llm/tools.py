@@ -1,11 +1,13 @@
 """Tool schema definitions exposed to the LLM."""
 
+from app.services.debts import KINDS as DEBT_KINDS
 from app.utils.dates import PERIODS
 
 PERIOD_ENUM = list(PERIODS)
 DATE = {"type": "string", "description": 'ISO date "YYYY-MM-DD"'}
 TYPE_ENUM = ["expense", "income"]
 SORT_ENUM = ["newest", "largest", "oldest"]
+DEBT_KIND_ENUM = list(DEBT_KINDS)
 
 AMOUNT = {"type": "number", "description": "Amount in rupees"}
 CATEGORY = {"type": "string", "description": "Category name"}
@@ -166,6 +168,52 @@ TOOLS = [
         "get_insights",
         "Spending insights for a month against the same point last month.",
         {"month": MONTH},
+    ),
+    _tool(
+        "record_debt",
+        "Record money lent, borrowed or repaid with a person.",
+        {
+            "person": {"type": "string", "description": "Who the debt is with"},
+            "kind": {
+                "type": "string",
+                "enum": DEBT_KIND_ENUM,
+                "description": "Direction of the money",
+            },
+            "amount": AMOUNT,
+            "account": ACCOUNT,
+            "note": {"type": "string", "description": "Short note"},
+            "date": DATE,
+        },
+        ["person", "kind", "amount"],
+    ),
+    _tool(
+        "debt_summary",
+        "Who owes the user and whom the user owes.",
+        {"person": {"type": "string", "description": "Limit to one person"}},
+    ),
+    _tool(
+        "create_goal",
+        "Create a savings goal with a target amount.",
+        {
+            "name": {"type": "string", "description": "Goal name, e.g. Laptop"},
+            "target_amount": {"type": "number", "description": "Amount to save in total"},
+            "deadline": DATE,
+        },
+        ["name", "target_amount"],
+    ),
+    _tool(
+        "add_to_goal",
+        "Add to a savings goal; a negative amount withdraws from it.",
+        {
+            "name": {"type": "string", "description": "Goal name"},
+            "amount": {"type": "number", "description": "Amount saved, negative to withdraw"},
+        },
+        ["name", "amount"],
+    ),
+    _tool(
+        "goals_status",
+        "Progress of every savings goal.",
+        {},
     ),
     _tool(
         "add_category",

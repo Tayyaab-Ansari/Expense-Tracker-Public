@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services import accounts, analytics, budgets, categories
+from app.services import accounts, analytics, budgets, categories, debts, goals
 from app.services import transactions as tx
 from app.utils.dates import parse_month, resolve_period, today
 from app.utils.money import format_rs, to_decimal
@@ -149,6 +149,42 @@ def _get_insights(session: Session, user_id: int, args: dict, context: dict) -> 
     return analytics.insights_data(session, user_id, year, month, today())
 
 
+def _record_debt(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Record money lent, borrowed or repaid."""
+    return debts.record_debt(
+        session,
+        user_id,
+        args["person"],
+        args["kind"],
+        args["amount"],
+        account=args.get("account"),
+        note=args.get("note"),
+        date=args.get("date"),
+    )
+
+
+def _debt_summary(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Report who owes whom."""
+    return debts.debt_summary(session, user_id, args.get("person"))
+
+
+def _create_goal(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Create a savings goal."""
+    return goals.create_goal(
+        session, user_id, args["name"], args["target_amount"], args.get("deadline")
+    )
+
+
+def _add_to_goal(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Add to or withdraw from a savings goal."""
+    return goals.add_to_goal(session, user_id, args["name"], args["amount"], args.get("date"))
+
+
+def _goals_status(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Report progress of every savings goal."""
+    return {"goals": goals.goals_status(session, user_id)}
+
+
 REGISTRY = {
     "add_transactions": _add_transactions,
     "update_transaction": _update_transaction,
@@ -165,6 +201,11 @@ REGISTRY = {
     "budget_status": _budget_status,
     "compare_months": _compare_months,
     "get_insights": _get_insights,
+    "record_debt": _record_debt,
+    "debt_summary": _debt_summary,
+    "create_goal": _create_goal,
+    "add_to_goal": _add_to_goal,
+    "goals_status": _goals_status,
 }
 
 

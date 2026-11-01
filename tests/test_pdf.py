@@ -1,5 +1,6 @@
 """Tests for the monthly PDF report builder and the calendar view."""
 
+import json
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -9,10 +10,12 @@ from reportlab.lib import colors
 from reportlab.platypus import Table
 from sqlalchemy.orm import Session
 
+from app.llm.dispatcher import dispatch
 from app.models import User
 from app.reports import calendar_view, pdf_builder
 from app.services import budgets, debts, goals
 from app.services import transactions as tx
+from app.utils.dates import parse_month
 
 YEAR, MONTH = 2026, 10
 MIN_SIZE = 1024
@@ -186,6 +189,41 @@ def test_highest_day_text() -> None:
 
     assert calendar_view.highest_day_text(totals) == "Highest day: 14 Oct · Rs 8,450"
     assert calendar_view.highest_day_text({}) is None
+
+
+def test_generate_monthly_report_tool(session: Session, filled: User, reports_dir: Path) -> None:
+    result = dispatch(session, filled.id, "generate_monthly_report", {"month": "october"})
+
+    assert result["status"] == "report ready"
+    document = result["document"]
+    assert document["filename"] == "Expenses_Oct_2026.pdf"
+    assert Path(document["path"]) == reports_dir / "Expenses_Oct_2026.pdf"
+    assert Path(document["path"]).read_bytes().startswith(b"%PDF")
+    assert document["caption"] == (
+        "📊 October 2026 · Spent Rs 3,450 · Income Rs 80,000 · Net Rs 76,550"
+    )
+    assert json.dumps(result, ensure_ascii=False)
+
+
+def test_generate_monthly_report_defaults_to_this_month(
+    session: Session, user: User, reports_dir: Path
+) -> None:
+    year, month = parse_month(None)
+
+    document = dispatch(session, user.id, "generate_monthly_report", {})["document"]
+
+    assert document["filename"] == f"Expenses_{date(year, month, 1):%b}_{year}.pdf"
+
+
+def test_generate_monthly_report_rejects_a_bad_month(session: Session, user: User) -> None:
+    assert "error" in dispatch(session, user.id, "generate_monthly_report", {"month": "nope"})
+
+
+def test_agent_collects_the_report_document(session: Session, user: User) -> None:
+    result = dispatch(session, user.id, "generate_monthly_report", {"month": "october"})
+
+    assert isinstance(result.get("document"), dict)
+    assert set(result["document"]) == {"path", "filename", "caption"}
 
 
 def test_legend_labels_every_level() -> None:

@@ -20,6 +20,7 @@ TEMPLATE = """You are {owner_name}'s personal expense tracker on WhatsApp.
 14. For comparisons show both totals and the % change, then the top 3 category changes.
 15. Udhaar diya / X owes me / X ko diye (loan) = lent. Udhaar liya / I owe X = borrowed. X ne wapas kiye = repaid_to_me. Maine X ko wapas kiye = repaid_by_me. Reply with the tool confirmation_text.
 16. Savings: "laptop ke liye 5000 bachaye" = add_to_goal. New goal needs name + target; ask if missing.
+17. When the user asks for a report or PDF, call generate_monthly_report; your text reply is not sent when a document is attached, so keep it to one word.
 
 Expense categories: {categories_expense}
 Income categories: {categories_income}

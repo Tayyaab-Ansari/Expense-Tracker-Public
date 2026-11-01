@@ -170,6 +170,11 @@ TOOLS = [
         {"month": MONTH},
     ),
     _tool(
+        "generate_monthly_report",
+        "Build the monthly expense report as a PDF and send it.",
+        {"month": MONTH},
+    ),
+    _tool(
         "record_debt",
         "Record money lent, borrowed or repaid with a person.",
         {

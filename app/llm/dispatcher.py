@@ -7,9 +7,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models import User
+from app.reports.pdf_builder import build_monthly_report
 from app.services import accounts, analytics, budgets, categories, debts, goals
 from app.services import transactions as tx
-from app.utils.dates import parse_month, resolve_period, today
+from app.utils.dates import month_bounds, parse_month, resolve_period, today
 from app.utils.money import format_rs, to_decimal
 
 logger = logging.getLogger(__name__)
@@ -149,6 +151,25 @@ def _get_insights(session: Session, user_id: int, args: dict, context: dict) -> 
     return analytics.insights_data(session, user_id, year, month, today())
 
 
+def _generate_monthly_report(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Build the monthly PDF report and hand it back as a document."""
+    year, month = parse_month(args.get("month"))
+    user = session.get(User, user_id)
+    path = build_monthly_report(session, user_id, year, month, user.name if user else "")
+
+    start, end = month_bounds(year, month)
+    expense = analytics.spending_summary(session, user_id, start, end)["total"]
+    income = analytics.spending_summary(session, user_id, start, end, type="income")["total"]
+    caption = (
+        f"📊 {start:%B %Y} · Spent {format_rs(expense)}"
+        f" · Income {format_rs(income)} · Net {format_rs(income - expense)}"
+    )
+    return {
+        "document": {"path": str(path), "filename": path.name, "caption": caption},
+        "status": "report ready",
+    }
+
+
 def _record_debt(session: Session, user_id: int, args: dict, context: dict) -> dict:
     """Record money lent, borrowed or repaid."""
     return debts.record_debt(
@@ -201,6 +222,7 @@ REGISTRY = {
     "budget_status": _budget_status,
     "compare_months": _compare_months,
     "get_insights": _get_insights,
+    "generate_monthly_report": _generate_monthly_report,
     "record_debt": _record_debt,
     "debt_summary": _debt_summary,
     "create_goal": _create_goal,

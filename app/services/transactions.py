@@ -1,12 +1,13 @@
 """Transaction service: add, edit, soft delete and list transactions."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Transaction
 from app.services.accounts import resolve_account
+from app.services.budgets import warning_for
 from app.services.categories import resolve_category
 from app.utils.dates import human_date, parse_date
 from app.utils.money import format_rs, to_decimal
@@ -39,6 +40,25 @@ def _confirmation_line(entry: dict) -> str:
     if entry["description"]:
         line += f" — {entry['description']}"
     return line
+
+
+def _budget_warnings(
+    session: Session, user_id: int, transactions: list[Transaction]
+) -> list[str]:
+    """Deduplicated budget warnings for the expense categories just saved."""
+    seen: set[tuple[int, date]] = set()
+    warnings: list[str] = []
+    for transaction in transactions:
+        if transaction.type != "expense" or transaction.category_id is None:
+            continue
+        key = (transaction.category_id, transaction.occurred_on)
+        if key in seen:
+            continue
+        seen.add(key)
+        warning = warning_for(session, user_id, transaction.category_id, transaction.occurred_on)
+        if warning and warning not in warnings:
+            warnings.append(warning)
+    return warnings
 
 
 def add_transactions(
@@ -81,8 +101,12 @@ def add_transactions(
 
     saved = [_as_dict(transaction) for transaction in transactions]
     lines = [_confirmation_line(entry) for entry in saved]
-    # budget warnings added in P24
-    return {"saved": saved, "confirmation_text": "\n".join(lines)}
+    result = {"saved": saved, "confirmation_text": "\n".join(lines)}
+
+    warnings = _budget_warnings(session, user_id, transactions)
+    if warnings:
+        result["budget_warnings"] = warnings
+    return result
 
 
 def get_transaction(session: Session, user_id: int, tx_id: int) -> Transaction | None:

@@ -154,6 +154,52 @@ def test_no_warning_without_a_budget(session: Session, user: User) -> None:
     assert budgets.warning_for(session, user.id, food.id, DAY) is None
 
 
+def test_warnings_are_returned_by_add_transactions(session: Session, user: User) -> None:
+    budgets.set_budget(session, user.id, "food", "15000")
+    budgets.set_budget(session, user.id, "transport", "1000")
+
+    result = tx.add_transactions(
+        session,
+        user.id,
+        [
+            {"amount": "12300", "category": "food", "date": DAY.isoformat()},
+            {"amount": "1200", "category": "transport", "date": DAY.isoformat()},
+            {"amount": "200", "category": "fuel", "date": DAY.isoformat()},
+            {"type": "income", "amount": "5000", "category": "salary", "date": DAY.isoformat()},
+        ],
+    )
+
+    assert result["budget_warnings"] == [
+        "⚠️ Food: Rs 12,300 / Rs 15,000 used (82%)",
+        "🚨 Transport budget exceeded: Rs 1,200 / Rs 1,000 (120%)",
+    ]
+
+
+def test_no_warnings_key_when_nothing_to_warn_about(session: Session, user: User) -> None:
+    budgets.set_budget(session, user.id, "food", "15000")
+
+    result = tx.add_transactions(
+        session, user.id, [{"amount": "100", "category": "food", "date": DAY.isoformat()}]
+    )
+
+    assert "budget_warnings" not in result
+
+
+def test_warnings_are_deduplicated_per_category(session: Session, user: User) -> None:
+    budgets.set_budget(session, user.id, "food", "15000")
+
+    result = tx.add_transactions(
+        session,
+        user.id,
+        [
+            {"amount": "6000", "category": "food", "date": DAY.isoformat()},
+            {"amount": "6500", "category": "food", "date": DAY.isoformat()},
+        ],
+    )
+
+    assert result["budget_warnings"] == ["⚠️ Food: Rs 12,500 / Rs 15,000 used (83%)"]
+
+
 def test_warning_counts_only_that_month(session: Session, user: User) -> None:
     budgets.set_budget(session, user.id, "food", "15000")
     spend(session, user, "14000", "food", date(2026, 9, 10))

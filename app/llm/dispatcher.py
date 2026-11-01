@@ -7,9 +7,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.services import accounts, analytics, categories
+from app.services import accounts, analytics, budgets, categories
 from app.services import transactions as tx
-from app.utils.dates import resolve_period
+from app.utils.dates import parse_month, resolve_period, today
 from app.utils.money import format_rs, to_decimal
 
 logger = logging.getLogger(__name__)
@@ -115,6 +115,40 @@ def _add_category(session: Session, user_id: int, args: dict, context: dict) -> 
     return categories.add_category(session, user_id, args["name"], args["kind"])
 
 
+def _set_budget(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Set the monthly budget of an expense category."""
+    return budgets.set_budget(session, user_id, args["category"], args["amount"])
+
+
+def _remove_budget(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Remove the budget of an expense category."""
+    return budgets.remove_budget(session, user_id, args["category"])
+
+
+def _budget_status(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Report budgets against spend for a month."""
+    year, month = parse_month(args.get("month"))
+    return budgets.budget_status(session, user_id, year, month)
+
+
+def _compare_months(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Compare two months of income and spending."""
+    a = parse_month(args.get("month_a") or "last_month")
+    b = parse_month(args.get("month_b") or "this_month")
+    result = analytics.compare_months(session, user_id, a, b)
+    return {
+        "label_a": f"{a[0]:04d}-{a[1]:02d}",
+        "label_b": f"{b[0]:04d}-{b[1]:02d}",
+        **result,
+    }
+
+
+def _get_insights(session: Session, user_id: int, args: dict, context: dict) -> dict:
+    """Spending insights for a month."""
+    year, month = parse_month(args.get("month"))
+    return analytics.insights_data(session, user_id, year, month, today())
+
+
 REGISTRY = {
     "add_transactions": _add_transactions,
     "update_transaction": _update_transaction,
@@ -126,6 +160,11 @@ REGISTRY = {
     "set_account_balance": _set_account_balance,
     "set_default_account": _set_default_account,
     "add_category": _add_category,
+    "set_budget": _set_budget,
+    "remove_budget": _remove_budget,
+    "budget_status": _budget_status,
+    "compare_months": _compare_months,
+    "get_insights": _get_insights,
 }
 
 

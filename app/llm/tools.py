@@ -11,6 +11,10 @@ AMOUNT = {"type": "number", "description": "Amount in rupees"}
 CATEGORY = {"type": "string", "description": "Category name"}
 ACCOUNT = {"type": "string", "description": "Account name, e.g. Cash, JazzCash, Bank"}
 PERIOD = {"type": "string", "enum": PERIOD_ENUM, "description": "Named period"}
+MONTH = {
+    "type": "string",
+    "description": 'Month as "2026-10", "october", "this_month" or "last_month"',
+}
 REF = {
     "type": ["integer", "string"],
     "description": 'Transaction id, or "last" for the latest one',
@@ -135,6 +139,33 @@ TOOLS = [
         "Make an account the default for new transactions.",
         {"account": ACCOUNT},
         ["account"],
+    ),
+    _tool(
+        "set_budget",
+        "Set or change the monthly budget of an expense category.",
+        {"category": CATEGORY, "amount": AMOUNT},
+        ["category", "amount"],
+    ),
+    _tool(
+        "remove_budget",
+        "Remove the budget of an expense category.",
+        {"category": CATEGORY},
+        ["category"],
+    ),
+    _tool(
+        "budget_status",
+        "Budgets with spend and remaining amounts for a month.",
+        {"month": MONTH},
+    ),
+    _tool(
+        "compare_months",
+        "Compare two months; month_a is the earlier baseline, month_b is compared to it.",
+        {"month_a": MONTH, "month_b": MONTH},
+    ),
+    _tool(
+        "get_insights",
+        "Spending insights for a month against the same point last month.",
+        {"month": MONTH},
     ),
     _tool(
         "add_category",

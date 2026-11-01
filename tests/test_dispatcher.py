@@ -9,7 +9,7 @@ from app.llm.dispatcher import REGISTRY, dispatch
 from app.llm.tools import TOOL_NAMES
 from app.models import User
 from app.services import transactions as tx
-from app.utils.dates import resolve_period
+from app.utils.dates import parse_month, resolve_period
 
 DAY = date(2026, 10, 15)
 
@@ -197,6 +197,115 @@ def test_add_category_via_dispatch(session: Session, user: User) -> None:
 
     assert result["name"] == "Side Hustle"
     assert result["kind"] == "income"
+
+
+def test_budget_tools_via_dispatch(session: Session, user: User) -> None:
+    assert dispatch(session, user.id, "set_budget", {"category": "food", "amount": 15000}) == {
+        "category": "Food",
+        "amount": "15000.00",
+        "amount_display": "Rs 15,000",
+    }
+
+    dispatch(
+        session,
+        user.id,
+        "add_transactions",
+        {"items": [{"amount": 12300, "category": "food", "date": "2026-10-05"}]},
+    )
+    status = dispatch(session, user.id, "budget_status", {"month": "2026-10"})
+
+    assert status["month"] == "2026-10"
+    assert status["items"][0] == {
+        "category": "Food",
+        "budget": "15000.00",
+        "spent": "12300.00",
+        "remaining": "2700.00",
+        "pct": "82.00",
+    }
+    assert json.dumps(status)
+
+    assert dispatch(session, user.id, "remove_budget", {"category": "food"}) == {
+        "category": "Food",
+        "removed": True,
+    }
+    assert dispatch(session, user.id, "remove_budget", {"category": "food"})["error"]
+
+
+def test_set_budget_rejects_income_category_via_dispatch(session: Session, user: User) -> None:
+    result = dispatch(session, user.id, "set_budget", {"category": "salary", "amount": 100})
+
+    assert "income category" in result["error"]
+
+
+def test_budget_status_defaults_to_this_month(session: Session, user: User) -> None:
+    year, month = parse_month(None)
+
+    result = dispatch(session, user.id, "budget_status", {})
+
+    assert result["month"] == f"{year:04d}-{month:02d}"
+
+
+def test_compare_months_via_dispatch(session: Session, user: User) -> None:
+    dispatch(
+        session,
+        user.id,
+        "add_transactions",
+        {
+            "items": [
+                {"amount": 1000, "category": "food", "date": "2026-09-05"},
+                {"amount": 3000, "category": "food", "date": "2026-10-05"},
+            ]
+        },
+    )
+
+    result = dispatch(
+        session, user.id, "compare_months", {"month_a": "2026-09", "month_b": "2026-10"}
+    )
+
+    assert result["label_a"] == "2026-09"
+    assert result["label_b"] == "2026-10"
+    assert result["a"]["expense"] == "1000.00"
+    assert result["b"]["expense"] == "3000.00"
+    assert result["expense_change_pct"] == "200.00"
+    assert result["categories"][0]["category"] == "Food"
+    assert json.dumps(result)
+
+
+def test_compare_months_defaults_to_last_and_this_month(session: Session, user: User) -> None:
+    this_year, this_month = parse_month("this_month")
+    last_year, last_month = parse_month("last_month")
+
+    result = dispatch(session, user.id, "compare_months", {})
+
+    assert result["label_a"] == f"{last_year:04d}-{last_month:02d}"
+    assert result["label_b"] == f"{this_year:04d}-{this_month:02d}"
+
+
+def test_get_insights_via_dispatch(session: Session, user: User) -> None:
+    dispatch(
+        session,
+        user.id,
+        "add_transactions",
+        {"items": [{"amount": 500, "category": "food", "date": "2026-10-05"}]},
+    )
+    dispatch(session, user.id, "set_budget", {"category": "food", "amount": 600})
+
+    result = dispatch(session, user.id, "get_insights", {"month": "2026-10"})
+
+    assert result["period_label"] == "Oct 2026"
+    assert result["spent_so_far"] == "500.00"
+    assert [item["category"] for item in result["budgets_at_risk"]] == ["Food"]
+    assert result["biggest_expense"]["amount"] == "500.00"
+    assert json.dumps(result)
+
+
+def test_invalid_month_returns_error(session: Session, user: User) -> None:
+    for name, args in (
+        ("budget_status", {"month": "nope"}),
+        ("get_insights", {"month": "13"}),
+        ("compare_months", {"month_a": "octobre"}),
+    ):
+        assert "error" in dispatch(session, user.id, name, args)
 
 
 def test_set_default_account_via_dispatch(session: Session, user: User) -> None:

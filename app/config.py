@@ -2,8 +2,11 @@
 
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PSYCOPG_PREFIX = "postgresql+psycopg://"
+POSTGRES_PREFIXES = ("postgres://", "postgresql://")
 
 
 class Settings(BaseSettings):
@@ -35,6 +38,15 @@ class Settings(BaseSettings):
     LLM_FALLBACK_MODEL: str = "google/gemini-3.1-flash-lite"
     TRANSCRIBE_MODEL: str = "google/gemini-2.5-flash-lite"
     HISTORY_TURNS: int = 6
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def _use_psycopg_driver(cls, value: str) -> str:
+        """Point bare Postgres URLs at the psycopg driver SQLAlchemy needs."""
+        for prefix in POSTGRES_PREFIXES:
+            if value.startswith(prefix):
+                return PSYCOPG_PREFIX + value[len(prefix) :]
+        return value
 
     @property
     def allowed_numbers(self) -> frozenset[str]:

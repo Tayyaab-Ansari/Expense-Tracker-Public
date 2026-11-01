@@ -2,6 +2,8 @@
 
 import logging
 import mimetypes
+from collections import deque
+from time import monotonic
 
 from app.bootstrap import get_or_create_user
 from app.db import session_scope
@@ -23,7 +25,33 @@ UNSUPPORTED_REPLY = "Abhi sirf text aur voice notes support hain."
 ERROR_REPLY = "⚠️ Kuch masla hua, dobara try karein."
 NO_SPEECH_REPLY = "🎤 Awaaz samajh nahi aayi, dobara bhejein."
 TOO_LONG_REPLY = "🎤 Voice note 2 minute se chhota bhejein."
+RATE_LIMIT_REPLY = "⏳ Thora ruk kar bhejein."
 DEFAULT_MIME = "application/pdf"
+
+RATE_LIMIT = 20
+RATE_WINDOW = 60.0
+
+ALLOW, WARN, DROP = "allow", "warn", "drop"
+
+_recent: dict[str, deque[float]] = {}
+_warned: set[str] = set()
+
+
+def _throttle(sender: str) -> str:
+    """Whether to answer a sender, warn them once, or stay silent."""
+    now = monotonic()
+    window = _recent.setdefault(sender, deque())
+    while window and now - window[0] > RATE_WINDOW:
+        window.popleft()
+
+    if len(window) < RATE_LIMIT:
+        window.append(now)
+        _warned.discard(sender)
+        return ALLOW
+    if sender in _warned:
+        return DROP
+    _warned.add(sender)
+    return WARN
 
 
 async def _send_documents(sender: str, documents: list[dict]) -> None:
@@ -77,6 +105,16 @@ async def _answer_audio(msg: IncomingMessage) -> None:
 
 async def handle_message(msg: IncomingMessage) -> None:
     """Reply to one inbound message, never raising to the caller."""
+    decision = _throttle(msg.sender)
+    if decision != ALLOW:
+        logger.warning("Rate limited %s (%s)", msg.message_id, decision)
+        if decision == WARN:
+            try:
+                await send_text(msg.sender, RATE_LIMIT_REPLY)
+            except Exception:
+                logger.exception("Could not send the rate limit reply for %s", msg.message_id)
+        return
+
     try:
         await mark_as_read(msg.message_id)
         if msg.type == "text" and msg.text:

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app import handler
 from app.config import settings
+from app import main
 from app.main import app
 from app.models import ProcessedMessage
 from app.whatsapp import webhook
@@ -255,8 +256,12 @@ def test_invalid_json_is_accepted_without_handling(client: TestClient, handled: 
     assert handled == []
 
 
-def test_health_and_privacy_routes(client: TestClient) -> None:
-    assert client.get("/health").json() == {"status": "ok"}
+def test_health_and_privacy_routes(
+    client: TestClient, handled: list, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(main, "session_scope", webhook.session_scope)
+
+    assert client.get("/health").json() == {"status": "ok", "db": "ok"}
     assert client.get("/").json() == {"status": "up"}
 
     privacy = client.get("/privacy")

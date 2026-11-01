@@ -1,6 +1,6 @@
 """Analytics service: totals, breakdowns and period comparisons."""
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import ColumnElement, func, select
@@ -8,9 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.models import MONEY, Account, Category, Transaction
 from app.services.accounts import resolve_account
-from app.utils.money import to_decimal
+from app.utils.dates import month_bounds
+from app.utils.money import pct_change, to_decimal
 
 MAX_SEARCH_LIMIT = 20
+MAX_COMPARE_CATEGORIES = 8
+MAX_MOVERS = 3
+AT_RISK_PCT = Decimal("80")
+CENTS = Decimal("0.01")
 ZERO = Decimal("0.00")
 
 
@@ -211,3 +216,106 @@ def daily_totals(
         .order_by(Transaction.occurred_on)
     ).all()
     return {occurred_on: total for occurred_on, total in rows}
+
+
+def _expense_by_category(
+    session: Session, user_id: int, start: date, end: date
+) -> dict[str, Decimal]:
+    """Expense total per category name for a period."""
+    summary = spending_summary(session, user_id, start, end)
+    return {row["category"]: row["total"] for row in summary["by_category"]}
+
+
+def _category_diffs(first: dict[str, Decimal], second: dict[str, Decimal]) -> list[dict]:
+    """Per-category movement from the first period to the second."""
+    diffs = []
+    for name in first.keys() | second.keys():
+        before = first.get(name, ZERO)
+        after = second.get(name, ZERO)
+        diffs.append(
+            {
+                "category": name,
+                "a": before,
+                "b": after,
+                "diff": after - before,
+                "pct": pct_change(before, after),
+            }
+        )
+    return diffs
+
+
+def _previous_month(year: int, month: int) -> tuple[int, int]:
+    """Year and month before the given one."""
+    previous = date(year, month, 1) - timedelta(days=1)
+    return previous.year, previous.month
+
+
+def compare_months(
+    session: Session, user_id: int, a: tuple[int, int], b: tuple[int, int]
+) -> dict:
+    """Compare two months, reporting the movement from month a to month b."""
+    a_start, a_end = month_bounds(*a)
+    b_start, b_end = month_bounds(*b)
+
+    totals = {}
+    for key, (start, end) in {"a": (a_start, a_end), "b": (b_start, b_end)}.items():
+        expense = spending_summary(session, user_id, start, end)["total"]
+        income = spending_summary(session, user_id, start, end, type="income")["total"]
+        totals[key] = {"income": income, "expense": expense, "net": income - expense}
+
+    diffs = _category_diffs(
+        _expense_by_category(session, user_id, a_start, a_end),
+        _expense_by_category(session, user_id, b_start, b_end),
+    )
+    diffs.sort(key=lambda row: abs(row["diff"]), reverse=True)
+
+    return {
+        "a": totals["a"],
+        "b": totals["b"],
+        "expense_change_pct": pct_change(totals["a"]["expense"], totals["b"]["expense"]),
+        "categories": diffs[:MAX_COMPARE_CATEGORIES],
+    }
+
+
+def insights_data(session: Session, user_id: int, year: int, month: int, today: date) -> dict:
+    """Spending insights for a month, compared fairly with the same point last month."""
+    # imported here because budgets builds on this module
+    from app.services.budgets import budget_status
+
+    first, last = month_bounds(year, month)
+    is_current = (year, month) == (today.year, today.month)
+    end = min(max(today, first), last) if is_current else last
+
+    previous_year, previous_month = _previous_month(year, month)
+    previous_first, previous_last = month_bounds(previous_year, previous_month)
+    previous_end = date(previous_year, previous_month, min(end.day, previous_last.day))
+
+    spent_so_far = spending_summary(session, user_id, first, end)["total"]
+    prev_same_point = spending_summary(session, user_id, previous_first, previous_end)["total"]
+    daily_average = (spent_so_far / end.day).quantize(CENTS)
+
+    diffs = _category_diffs(
+        _expense_by_category(session, user_id, previous_first, previous_end),
+        _expense_by_category(session, user_id, first, end),
+    )
+    rising = sorted(diffs, key=lambda row: row["diff"], reverse=True)
+    biggest = top_expenses(session, user_id, first, end, n=1)
+
+    return {
+        "period_label": (
+            f"{first.day}–{end.day} {first:%b %Y}" if end != last else f"{first:%b %Y}"
+        ),
+        "spent_so_far": spent_so_far,
+        "prev_same_point": prev_same_point,
+        "change_pct": pct_change(prev_same_point, spent_so_far),
+        "daily_average": daily_average,
+        "projected_month_total": (daily_average * last.day).quantize(CENTS) if is_current else None,
+        "top_increases": [row for row in rising if row["diff"] > 0][:MAX_MOVERS],
+        "top_decreases": [row for row in reversed(rising) if row["diff"] < 0][:MAX_MOVERS],
+        "biggest_expense": biggest[0] if biggest else None,
+        "budgets_at_risk": [
+            item
+            for item in budget_status(session, user_id, year, month)["items"]
+            if item["pct"] >= AT_RISK_PCT
+        ],
+    }

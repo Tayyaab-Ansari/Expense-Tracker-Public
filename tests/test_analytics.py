@@ -146,3 +146,168 @@ def test_top_expenses(session: Session, seeded: User) -> None:
 
     assert [item["amount"] for item in top] == [Decimal("1000.00"), Decimal("850.00")]
     assert all(item["type"] == "expense" for item in top)
+
+
+SEPTEMBER = (2026, 9)
+OCTOBER = (2026, 10)
+
+
+@pytest.fixture
+def two_months(session: Session, user: User) -> User:
+    """Spending across September and October 2026 with known per-category movement."""
+    tx.add_transactions(
+        session,
+        user.id,
+        [
+            {"amount": "1000", "category": "food", "date": "2026-09-05"},
+            {"amount": "2000", "category": "transport", "date": "2026-09-10"},
+            {"amount": "500", "category": "bills", "date": "2026-09-25"},
+            {"type": "income", "amount": "40000", "category": "salary", "date": "2026-09-01"},
+            {"amount": "3000", "category": "food", "date": "2026-10-05"},
+            {"amount": "800", "category": "transport", "date": "2026-10-10"},
+            {"amount": "250", "category": "fuel", "date": "2026-10-20"},
+            {"type": "income", "amount": "50000", "category": "salary", "date": "2026-10-01"},
+        ],
+    )
+    return user
+
+
+def test_compare_months_totals(session: Session, two_months: User) -> None:
+    result = an.compare_months(session, two_months.id, SEPTEMBER, OCTOBER)
+
+    assert result["a"] == {
+        "income": Decimal("40000.00"),
+        "expense": Decimal("3500.00"),
+        "net": Decimal("36500.00"),
+    }
+    assert result["b"] == {
+        "income": Decimal("50000.00"),
+        "expense": Decimal("4050.00"),
+        "net": Decimal("45950.00"),
+    }
+    assert result["expense_change_pct"] == Decimal("15.71")
+
+
+def test_compare_months_categories(session: Session, two_months: User) -> None:
+    rows = {row["category"]: row for row in an.compare_months(session, two_months.id, SEPTEMBER, OCTOBER)["categories"]}
+
+    assert rows["Food"]["diff"] == Decimal("2000.00")
+    assert rows["Food"]["pct"] == Decimal("200.00")
+    assert rows["Transport"]["diff"] == Decimal("-1200.00")
+    assert rows["Bills"] == {
+        "category": "Bills",
+        "a": Decimal("500.00"),
+        "b": Decimal("0.00"),
+        "diff": Decimal("-500.00"),
+        "pct": Decimal("-100.00"),
+    }
+    assert rows["Fuel"]["pct"] is None
+
+    diffs = [abs(row["diff"]) for row in an.compare_months(session, two_months.id, SEPTEMBER, OCTOBER)["categories"]]
+    assert diffs == sorted(diffs, reverse=True)
+
+
+def test_compare_months_caps_categories(session: Session, user: User) -> None:
+    tx.add_transactions(
+        session,
+        user.id,
+        [
+            {"amount": str(100 + index), "category": name, "date": "2026-10-05"}
+            for index, name in enumerate(
+                [
+                    "food",
+                    "groceries",
+                    "transport",
+                    "fuel",
+                    "bills",
+                    "mobile",
+                    "rent",
+                    "shopping",
+                    "health",
+                    "education",
+                ]
+            )
+        ],
+    )
+
+    result = an.compare_months(session, user.id, SEPTEMBER, OCTOBER)
+
+    assert len(result["categories"]) == an.MAX_COMPARE_CATEGORIES
+
+
+def test_insights_compares_same_point_of_previous_month(
+    session: Session, two_months: User
+) -> None:
+    result = an.insights_data(session, two_months.id, 2026, 10, date(2026, 10, 15))
+
+    assert result["period_label"] == "1–15 Oct 2026"
+    assert result["spent_so_far"] == Decimal("3800.00")
+    assert result["prev_same_point"] == Decimal("3000.00")
+    assert result["change_pct"] == Decimal("26.67")
+    assert result["daily_average"] == Decimal("253.33")
+    assert result["projected_month_total"] == Decimal("7853.23")
+    assert result["biggest_expense"]["amount"] == Decimal("3000.00")
+
+
+def test_insights_movers(session: Session, two_months: User) -> None:
+    result = an.insights_data(session, two_months.id, 2026, 10, date(2026, 10, 15))
+
+    assert [(row["category"], row["diff"]) for row in result["top_increases"]] == [
+        ("Food", Decimal("2000.00"))
+    ]
+    assert [(row["category"], row["diff"]) for row in result["top_decreases"]] == [
+        ("Transport", Decimal("-1200.00"))
+    ]
+    assert len(result["top_increases"]) <= an.MAX_MOVERS
+    assert len(result["top_decreases"]) <= an.MAX_MOVERS
+
+
+def test_insights_for_a_past_month_uses_the_whole_month(
+    session: Session, two_months: User
+) -> None:
+    result = an.insights_data(session, two_months.id, 2026, 9, date(2026, 10, 15))
+
+    assert result["period_label"] == "Sep 2026"
+    assert result["spent_so_far"] == Decimal("3500.00")
+    assert result["projected_month_total"] is None
+    assert result["prev_same_point"] == Decimal("0.00")
+    assert result["change_pct"] is None
+
+
+def test_insights_clamps_the_previous_month_day(session: Session, user: User) -> None:
+    tx.add_transactions(
+        session,
+        user.id,
+        [
+            {"amount": "400", "category": "food", "date": "2026-02-28"},
+            {"amount": "100", "category": "food", "date": "2026-03-30"},
+        ],
+    )
+
+    result = an.insights_data(session, user.id, 2026, 3, date(2026, 3, 31))
+
+    assert result["prev_same_point"] == Decimal("400.00")
+    assert result["spent_so_far"] == Decimal("100.00")
+
+
+def test_insights_budgets_at_risk(session: Session, two_months: User) -> None:
+    from app.services import budgets
+
+    budgets.set_budget(session, two_months.id, "food", "3200")
+    budgets.set_budget(session, two_months.id, "transport", "10000")
+
+    result = an.insights_data(session, two_months.id, 2026, 10, date(2026, 10, 15))
+
+    assert [item["category"] for item in result["budgets_at_risk"]] == ["Food"]
+    assert result["budgets_at_risk"][0]["pct"] >= an.AT_RISK_PCT
+
+
+def test_insights_with_no_data(session: Session, user: User) -> None:
+    result = an.insights_data(session, user.id, 2026, 10, date(2026, 10, 15))
+
+    assert result["spent_so_far"] == Decimal("0.00")
+    assert result["daily_average"] == Decimal("0.00")
+    assert result["change_pct"] is None
+    assert result["biggest_expense"] is None
+    assert result["top_increases"] == []
+    assert result["budgets_at_risk"] == []
